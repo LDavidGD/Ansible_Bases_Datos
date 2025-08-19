@@ -1,0 +1,119 @@
+---
+- name: Creacion de usuarios
+  hosts: all
+  vars:
+    mariadb_host: 172.16.40.122
+    mariadb_user: userdb
+    mariadb_password: Test2025
+    puerto: 3306
+    nombre_usr: Garcia23
+    password_user: EdPass12345
+    privilegios: [select, insert, delete, ceate]
+
+  tasks:
+##################################################################################
+## VALIDAR SI EXISTE EL USUARIO
+
+    - name: Verificar si existe el usuario
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        query: >
+          SELECT EXISTS (
+            SELECT user FROM mysql.user
+            WHERE user = "{{ nombre_usr }}"
+          ) AS existe;
+      register: verificar_user
+
+##################################################################################
+## CREACIÓN DEL USUARIO 
+
+    - name: Tratar de crear el usuario
+      block:
+      - name: Crear usuario en MariaDB
+        community.mysql.mysql_user:
+          name: "{{ nombre_usr }}"
+          password: "{{ password_user }}"
+          priv: "*.*:{{ privilegios | join(',') }}"
+          host: "%"
+          state: present
+          login_host: "{{ mariadb_host }}"
+          login_user: "{{ mariadb_user }}"
+          login_password: "{{ mariadb_password }}"
+        register: new_user
+        when: not verificar_user.query_result[0][0]['existe']
+
+      rescue:
+        - name: Marcar error de creacion
+          set_fact:
+            crear_error: true
+
+        - name: Eliminar usuario si falló creación de privilegios
+          community.mysql.mysql_user:
+            name: "{{ nombre_usr }}"
+            host: "%"
+            state: absent
+            login_host: "{{ mariadb_host }}"
+            login_user: "{{ mariadb_user }}"
+            login_password: "{{ mariadb_password }}"
+
+    - debug: var=new_user
+
+##################################################################################
+## EVALUAR RESULTADO DE LAS TAREAS
+
+    - name: Evaluar resultado al tratar de crear un usuario
+      set_fact:
+        resultTarea: >-
+          {%- if not verificar_user.query_result[0][0]['existe'] and new_user.changed -%}
+            SUCCESSFUL
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+
+##################################################################################
+## MOSTRAR RESULTADO FINAL
+
+    - name: Resultado cuando se crea exitosamente el usuario
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "El usuario -{{ nombre_usr }}- ha sido creado exitosamente" 
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL"
+
+    - name: Resultado cuando el usuario ya existe
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "El usuario ingresado -{{ nombre_usr }}- ya existe"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and verificar_user.query_result[0][0]['existe']
+
+    - name: Resultado cuando el usuario no se creo correctamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Error el usuario -{{ nombre_usr }}- no pudo crearse correctamente"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not new_user.changed and not verificar_user.query_result[0][0]['existe'] and crear_error | default(false)

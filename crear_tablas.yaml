@@ -1,0 +1,142 @@
+---
+- name: Crear tablas en MariaDB y MySQL
+  hosts: all
+  vars:
+    mariadb_host: 172.16.40.122
+    mariadb_user: userdb
+    mariadb_password: Test2025
+    puerto: 3306
+    database_name: base_datos3
+    table_name: tabla_4
+    data_insert: true
+    user_name: [Mario, Rodrigo]
+    email: [mario@example.com, rodrigo@example.com]
+
+  tasks:
+##################################################################################
+## VALIDAR SI LA BASE DE DATOS EXISTE EN EL SERVIDOR
+
+    - name: Verificar si existe la base de datos
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        query: >
+          SELECT EXISTS (
+            SELECT SCHEMA_NAME FROM information_schema.schemata
+            WHERE SCHEMA_NAME = "{{ database_name }}"
+          ) AS existe;
+      register: verificar_db
+
+##################################################################################
+## CREAR TABLA SI NO EXISTE
+
+    - name: Tratar de crear una tabla
+      block:
+      - name: Crear tabla 
+        community.mysql.mysql_query:
+          login_host: "{{ mariadb_host }}"
+          login_user: "{{ mariadb_user }}"
+          login_password: "{{ mariadb_password }}"
+          login_db: "{{ database_name }}"
+          query: >
+            CREATE TABLE {{table_name}} (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              nombre VARCHAR(255) NOT NULL,
+              email VARCHAR(255) UNIQUE,
+              fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        register: resultado_tabla
+        when: verificar_db.query_result[0][0]['existe']
+
+      rescue:
+        - name: Marcar error al crear tabla
+          set_fact:
+            tabla_error: true
+
+##################################################################################
+## INSERTAR VALORES A LA TABLA
+
+    - name: Insertar datos en la tabla
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ database_name }}"
+        query: >
+          INSERT INTO {{table_name}} (nombre, email)
+          VALUES ('{{ item.0 }}' , '{{ item.1 }}');
+      loop: "{{ user_name | zip(email) | list }}"
+      register: insertar_tabla
+      when: verificar_db.query_result[0][0]['existe'] and data_insert and resultado_tabla.changed
+
+# ##################################################################################
+# ## EVALUAR RESULTADO DE LAS TAREAS
+
+    - name: Evaluar resultado al tratar de crear una tabla
+      set_fact:
+        resultTarea: >-
+          {%- if verificar_db.query_result[0][0]['existe'] and resultado_tabla.changed -%}
+            SUCCESSFUL
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+
+##################################################################################
+## MOSTRAR RESULTADO FINAL
+
+    - name: Resultado cuando se crea la tabla exitosamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La tabla -{{ table_name }}- ha sido creada exitosamente en la base de datos -{{ database_name }}-" 
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL"
+
+    - name: Resultado cuando la base de datos no existe
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La tabla -{{ table_name }}- no pudo crearse debido a que la base de datos -{{ database_name }}- no existe"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not verificar_db.query_result[0][0]['existe']
+
+    - name: Resultado cuando la tabla ya exista
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La tabla ingresada -{{ table_name }}- no pudo ser creada, ya existe en la base de datos -{{ database_name }}-"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and verificar_db.query_result[0][0]['existe'] and tabla_error | default(false)
+
+    - name: Resultado cuando ocurra un error al crear la tabla
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La tabla ingresada -{{ table_name }}- no pudo ser creada correctamente"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and verificar_db.query_result[0][0]['existe'] and not resultado_tabla.changed and not tabla_error | default(false)

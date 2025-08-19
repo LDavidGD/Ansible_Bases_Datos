@@ -1,0 +1,99 @@
+---
+- name: Health check BD MariaDB
+  hosts: server-rocky
+  become: true 
+
+  vars:
+    db_host: "172.16.40.122"
+    db_port: 3306
+    db_name: "base_datos4"
+    db_user: "userdb"
+    db_password: "Test2025" 
+
+  tasks:
+  
+    - name: Verificar conexión a la base de datos
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: "SELECT 1;"
+      register: conexion_bd
+
+    - name: Verificar ESTADO DEL SERVICIO de BD
+      ansible.builtin.systemd:
+        name: mariadb
+        state: started
+      register: estado_servicio
+
+    - name: Mostrar si el estado del servicio de la BD esta ACTIVO
+      debug: 
+        msg: 
+      when: estado_servicio.status.ActiveState == "Active"
+
+    - name: Mostrar si el estado del servicio de la BD esta INACTIVO
+      debug:
+        msg:
+      when: estado_servicio.status.ActiveState != "Active"
+      
+    - name: Tiempo de espera de conexion a la BD
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: "SHOW VARIABLES LIKE 'connect_timeout';"
+      register: tiempo_espera 
+
+    - name: Ver tiempo de espera completo 
+      debug:
+        msg: "{{ tiempo_espera.query_result }}"
+
+    - name: Capacidad de la BD 
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query:  SELECT SUM(data_length + index_length) FROM information_schema.tables WHERE table_schema = '{{ db_user }}';
+      register: capacidad_base
+
+    - name: Conexiones activas 
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: SHOW STATUS LIKE 'Threads_connected';
+      register: conexiones_activas
+
+    - name: Debug conexiones_activas.query_result
+      debug:
+        var: conexiones_activas.query_result
+
+ 
+    - name: Mostrar usuarios conectados
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: SELECT DISTINCT USER, HOST FROM information_schema.processlist;
+      register: usuarios_conectados
+      when: conexiones_activas.query_result[0][0]['Value'] != '0'
+
+
+
+
+
+    - name: Informacion del health check de BD
+      debug:
+          msg:
+               - "La conexion con la BD es: {{ conexion_bd.query_result }}"
+               - "El estado del servicio de a BD es: {{ estado_servicio.status.ActiveState }}"
+               - "El tiempo de espera de conexion con la BD es: {{ tiempo_espera.query_result }}"
+               - "La capacidad de la BD es: {{ capacidad_base.query_result }}"
+               - "Las conexiones activas son: {{ conexiones_activas.query_result }}"
+               - "Los usuarios conectados son: {{ usuarios_conectados.query_result }}"
+               

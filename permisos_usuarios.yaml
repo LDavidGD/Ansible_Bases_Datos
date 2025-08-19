@@ -1,0 +1,258 @@
+# DESCRIPCION DE CADA PRIVILEGIO
+
+# Privilegios sobre objetos (tablas, rutinas, vistas, etc.):
+
+# ALTER:                    Permite modificar la estructura de tablas (añadir columnas, cambiar tipos, etc.).
+# ALTER ROUTINE:            Permite modificar funciones o procedimientos almacenados.
+# CREATE:                   Permite crear bases de datos, tablas o índices.
+# CREATE ROUTINE:           Permite crear funciones y procedimientos almacenados.
+# CREATE TEMPORARY TABLES:  Permite crear tablas temporales.
+# CREATE VIEW:              Permite crear vistas (consultas virtuales).
+# DELETE:                   Permite eliminar filas de tablas.
+# DROP:                     Permite eliminar bases de datos, tablas o vistas.
+# EVENT:                    Permite crear y manejar eventos programados.
+# EXECUTE:                  Permite ejecutar rutinas almacenadas (procedimientos o funciones).
+# INDEX:                    Permite crear o eliminar índices.
+# INSERT:                   Permite insertar filas en tablas.
+# LOCK TABLES:              Permite usar LOCK TABLE para bloquear tablas manualmente.
+# REFERENCES:               Permite crear claves foráneas (foreign keys).
+# SELECT:                   Permite leer datos de tablas.
+# SHOW VIEW:                Permite ver la definición de vistas.
+# TRIGGER:                  Permite crear y activar disparadores (triggers).
+# UPDATE:                   Permite modificar filas existentes en tablas.
+
+# Privilegios de administración del servidor:
+
+# ALL [PRIVILEGES]:         Otorga todos los privilegios posibles.
+# CREATE ROLE:              Permite crear roles de usuario.
+# CREATE TABLESPACE:        Permite crear espacios de tablas.
+# CREATE USER:              Permite crear, modificar o eliminar usuarios.
+# DROP ROLE:                Permite eliminar roles de usuario.
+# FILE:                     Permite leer o escribir archivos en el servidor desde SQL.
+# GRANT OPTION:             Permite otorgar a otros los privilegios que el usuario ya tiene.
+# PROCESS:                  Permite ver todas las consultas que se están ejecutando.
+# PROXY:                    Permite actuar como otro usuario (delegación/proxy).
+# RELOAD:                   Permite ejecutar comandos como FLUSH, para recargar cachés o logs.
+# REPLICATION CLIENT:       Permite consultar el estado del servidor de replicación.
+# REPLICATION SLAVE:        Permite que el servidor se conecte a un maestro para replicación.
+# SHOW DATABASES:           Permite ver todas las bases de datos del servidor.
+# SHUTDOWN:                 Permite apagar el servidor de base de datos.
+# SUPER:                    Permite operaciones privilegiadas (como KILL, variables globales, etc.).
+# USAGE:                    No otorga ningún privilegio, pero permite que el usuario exista.
+---
+- name: Actualizar permisos de usuarios
+  hosts: all
+  vars:
+    mariadb_host: 172.16.40.122
+    mariadb_user: userdb
+    mariadb_password: Test2025
+    puerto: 3306
+    nombre_usr: Pedro
+    new_pass: Ad987true2
+    change_pass: true
+    privilegios: [SELECT, INSERT, delete, drop, create]
+
+  tasks:
+##################################################################################
+## VALIDAR SI EXISTE EL USUARIO
+
+    - name: Verificar si existe el usuario
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        query: >
+          SELECT EXISTS (
+            SELECT user FROM mysql.user
+            WHERE user = "{{ nombre_usr }}"
+          ) AS existe;
+      register: verificar_user
+
+##################################################################################
+## CAMBIAR CONTRASEÑA SI EL USUARIO EXISTE Y LO SOLICITA
+
+    - name: Cambiar contraseña si el usuario existe y lo solicita
+      community.mysql.mysql_user:
+        name: "{{ nombre_usr }}"
+        password: "{{ new_pass }}"
+        host: "%"
+        state: present
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+      register: new_password
+      when: verificar_user.query_result[0][0]['existe'] and change_pass
+
+    - debug: var=new_password
+
+##################################################################################
+## MODIFICAR PERMISOS DEL USUARIO CUANDO HAY CAMBIO DE CONTRASEÑA
+
+    - name: Tratar de modificar los permisos
+      block:
+      - name: Modificar permisos de usuario en MariaDB
+        community.mysql.mysql_user:
+          name: "{{ nombre_usr }}"
+          priv: "*.*:{{ privilegios | join(',') }}"
+          host: "%"
+          state: present
+          login_host: "{{ mariadb_host }}"
+          login_user: "{{ mariadb_user }}"
+          login_password: "{{ mariadb_password }}"
+        register: permisos_user_change
+        when: verificar_user.query_result[0][0]['existe'] and change_pass
+
+      rescue:
+        - name: Marcar error de permisos
+          set_fact:
+            permisos_error: true
+
+    - debug: var=permisos_user_change
+
+##################################################################################
+## MODIFICAR PERMISOS DEL USUARIO CUANDO NO HAY CAMBIO DE CONTRASEÑA
+
+    - name: Tratar de modificar los permisos
+      block:
+      - name: Modificar permisos de usuario en MariaDB
+        community.mysql.mysql_user:
+          name: "{{ nombre_usr }}"
+          priv: "*.*:{{ privilegios | join(',') }}"
+          host: "%"
+          state: present
+          login_host: "{{ mariadb_host }}"
+          login_user: "{{ mariadb_user }}"
+          login_password: "{{ mariadb_password }}"
+        register: permisos_user
+        when: verificar_user.query_result[0][0]['existe'] and not change_pass
+
+      rescue:
+        - name: Marcar error de permisos
+          set_fact:
+            permisos_error: true
+
+    - debug: var=permisos_user
+
+##################################################################################
+## EVALUAR RESULTADO DE LAS TAREAS
+
+    - name: Evaluar resultado al tratar cambiar los permisos de un usuario
+      set_fact:
+        resultTarea: >-
+          {%- if verificar_user.query_result[0][0]['existe'] and permisos_user.changed -%}
+            SUCCESSFUL
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+      when: not change_pass
+
+    - name: Evaluar resultado al tratar cambiar los permisos de un usuario y cambiar contraseña
+      set_fact:
+        resultTarea: >-
+          {%- if verificar_user.query_result[0][0]['existe'] and permisos_user_change.changed and new_password.changed -%}
+            SUCCESSFUL
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+      when: change_pass
+
+##################################################################################
+## MOSTRAR RESULTADO FINAL
+
+    - name: Resultado cuando se modifican los permisos del usuario exitosamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Se han cambiado los permisos del usuario -{{ nombre_usr }}- exitosamente" 
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL" and not change_pass
+
+    - name: Resultado cuando se cambia la contraseña y se modifican los permisos del usuario exitosamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Se han cambiado la contraseña y los permisos del usuario -{{ nombre_usr }}- exitosamente" 
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL" and change_pass
+
+    - name: Resultado cuando el usuario no existe
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "El usuario ingresado -{{ nombre_usr }}- no existe"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not verificar_user.query_result[0][0]['existe'] and not change_pass
+
+    - name: Resultado cuando los permisos del usuario no se modificaron adecuadamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Error al ingresar los permisos del usuario -{{ nombre_usr }}-, verifica que esten bien escritos"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not permisos_user.changed and verificar_user.query_result[0][0]['existe'] and not change_pass
+
+    - name: Resultado cuando la contraseña no se cambio correctamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La contraseña para el usuario -{{ nombre_usr }}- no pudo ser modificada"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and verificar_user.query_result[0][0]['existe'] and change_pass and not new_password.changed
+
+    - name: Resultado cuando el usuario no existe y se cambia la contraseña
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "El usuario ingresado -{{ nombre_usr }}- no existe"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not verificar_user.query_result[0][0]['existe'] and change_pass
+
+    - name: Resultado cuando los permisos del usuario no se modificaron adecuadamente y se cambia la contraseña
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Se realizo un cambio de contraseña al usuario -{{ nombre_usr }}- pero hubo un error al ingresar los permisos, verifica que esten bien escritos"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not permisos_user_change.changed and verificar_user.query_result[0][0]['existe'] and change_pass and new_password.password_changed

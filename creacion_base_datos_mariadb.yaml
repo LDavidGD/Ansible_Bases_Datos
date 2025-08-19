@@ -1,0 +1,274 @@
+---
+- name: Verificación y creación de base de datos en MariaDB
+  hosts: all
+  vars:
+    mariadb_host: 172.16.40.122
+    mariadb_user: userdb
+    mariadb_password: Test2025
+    puerto: 3306
+    base_datos: base_datos4
+    nombre_usr: Ayala2
+    nombre_usr_password: EdPass12345
+    new_user: True
+    other_user: Ayala1
+    other_pass: EdPass12345
+
+  tasks:
+##################################################################################
+## VALIDACIÓN SI LA BASE DE DATOS EXISTE EN EL SERVIDOR
+
+    - name: Verificar si existe la base de datos
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        query: >
+          SELECT EXISTS (
+            SELECT SCHEMA_NAME FROM information_schema.schemata
+            WHERE SCHEMA_NAME = "{{ base_datos }}"
+          ) AS existe;
+      register: verificar_db
+
+##################################################################################
+## VALIDACIÓN SI EXISTE EL USUARIO CUANDO SE CREA
+
+    - name: Verificar si existe el usuario
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        query: >
+          SELECT EXISTS (
+            SELECT user FROM mysql.user
+            WHERE user = "{{ nombre_usr }}"
+          ) AS existe;
+      register: verificar_user
+      when: new_user
+
+##################################################################################
+## DEFINIR VARIABLES POR DEFECTO CUANDO SE NO CREA USUARIO
+
+    - name: Definir verificar_user por defecto si no se ejecutó
+      set_fact:
+        verificar_user:
+          query_result:
+            - - existe: 0
+      when: not new_user
+
+##################################################################################
+## CREACIÓN DEL USUARIO SI SE SOLICITA
+
+    - name: Crear usuario en MariaDB en caso de ser necesario
+      community.mysql.mysql_user:
+        name: "{{ nombre_usr }}"
+        password: "{{ nombre_usr_password }}"
+        priv: "*.*:ALL"
+        host: "%"
+        state: present
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+      register: usr
+      when: new_user and not verificar_user.query_result[0][0]['existe'] and not verificar_db.query_result[0][0]['existe']
+
+##################################################################################
+## ACTUALIZACIÓN DE CREDENCIALES AL NUEVO USUARIO
+
+    - name: Actualizar variables al nuevo usuario
+      ansible.builtin.set_fact:
+        mariadb_user: "{{ nombre_usr }}"
+        mariadb_password: "{{ nombre_usr_password }}"
+      register: credenciales
+      when: new_user and not verificar_user.query_result[0][0]['existe']
+
+##################################################################################
+## VALIDAR SI EXISTE EL USUARIO AL QUE DESEA INGRESAR
+
+    - name: Verificar si existe el usuario ingresado
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        query: >
+          SELECT EXISTS (
+            SELECT user FROM mysql.user
+            WHERE user = "{{ other_user }}"
+          ) AS existe;
+      register: verificar_other_user
+      when: not new_user
+
+##################################################################################
+## DEFINIR VARIABLES POR DEFECTO CUANDO SE CREA USUARIO
+
+    - name: Definir verificar_other_user por defecto si no se ejecutó
+      set_fact:
+        verificar_other_user:
+          query_result:
+            - - existe: 0
+      when: new_user
+
+##################################################################################
+## ACTUALIZACIÓN DE CREDENCIALES AL USUARIO EXISTENTE
+
+    - name: Actualizar credenciales con usuario existente
+      ansible.builtin.set_fact:
+        mariadb_user: "{{ other_user }}"
+        mariadb_password: "{{ other_pass }}"
+      register: other_credenciales
+      when: not new_user
+
+##################################################################################
+## VERIFICAR CREDENCIALES AL USUARIO EXISTENTE
+
+    - name: Verificar si la contraseña es válida
+      community.mysql.mysql_query:
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_host: "{{ mariadb_host }}"
+        query: "SELECT 1;"
+      register: validar_credenciales
+      ignore_errors: yes
+      when: not new_user
+
+##################################################################################
+## CREACIÓN DE LA BASE DE DATOS PARA NUEVO USUARIO
+
+    - name: Crear base de datos si no existe
+      community.mysql.mysql_db:
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_host: "{{ mariadb_host }}"
+        name: "{{ base_datos }}"
+      register: result_db
+      when: not verificar_db.query_result[0][0]['existe'] and usr.changed and new_user
+
+##################################################################################
+## CREACIÓN DE LA BASE DE DATOS PARA USUARIO EXISTENTE
+
+    - name: Intentar crear base de datos cuando existe usuario
+      block:
+      - name: Crear base de datos si no existe
+        community.mysql.mysql_db:
+          login_user: "{{ mariadb_user }}"
+          login_password: "{{ mariadb_password }}"
+          login_host: "{{ mariadb_host }}"
+          name: "{{ base_datos }}"
+        register: result_db_other
+        when: not verificar_db.query_result[0][0]['existe'] and verificar_other_user.query_result[0][0]['existe'] and not new_user
+
+      rescue:
+          - name: Error contraseña incorrecta o sin permisos
+            set_fact:
+              db_error: "Fallo de autenticación o permisos insuficientes para el usuario {{ mariadb_user }}"
+
+##################################################################################
+## EVALUAR RESULTADO DE LAS TAREAS
+
+    - name: Evaluar resultado cuando se crea usuario y BD
+      set_fact:
+        resultTarea: >-
+          {%- if verificar_db.query_result[0][0]['existe'] == 0 and verificar_user.query_result[0][0]['existe'] == 0 and usr.changed == True and credenciales.failed == False and result_db.changed == True -%}
+            SUCCESSFUL
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+      when: new_user
+
+    - name: Evaluar resultado cuando solo se crea BD
+      set_fact:
+        resultTarea: >-
+          {%- if verificar_db.query_result[0][0]['existe'] == 0 and verificar_other_user.query_result[0][0]['existe'] == 1 and result_db_other.changed == True -%}
+            SUCCESSFUL
+          {%- elif result_db_other.failed | default(false) -%}
+            ESCALATED
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+      when: not new_user
+
+##################################################################################
+## MOSTRAR RESULTADO FINAL
+
+    - name: Resultado cuando se crean usuario y base de datos exitosamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "El usuario {{ nombre_usr }} y la base de datos {{ base_datos }} han sido creados exitosamente" 
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL" and new_user
+
+    - name: Resultado cuando se crea solo la base de datos exitosamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La base de datos {{ base_datos }} ha sido creado exitosamente con el usuario {{ other_user }}"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL" and not new_user
+
+    - name: Resultado cuando ya existe la base de datos al intentar crear usuario
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Se intento crear una base de datos, la base de datos {{ base_datos }} ya existe"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and verificar_db.query_result[0][0].existe and new_user
+
+    - name: Resultado cuando ya existe el usuario que se intenta crear
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "se intento crear la base de datos {{ base_datos }} y el usuario {{ nombre_usr }}, el usuario ya existe"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and verificar_user.query_result[0][0].existe and new_user and not verificar_db.query_result[0][0].existe
+
+    - name: Resultado cuando ya existe la base de datos con usuario existente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Se intento crear una base de datos, la base de datos {{ base_datos }} ya existe"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and verificar_db.query_result[0][0].existe and not new_user and not validar_credenciales.failed | default(false)
+
+    - name: Resultado cuando las credenciales son incorrectas con usuario existente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Credenciales incorrectas, usuario y/o contraseña incorrecta"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and result_db_other and not new_user and validar_credenciales.failed | default(false)

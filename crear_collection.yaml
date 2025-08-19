@@ -1,0 +1,182 @@
+---
+- name: Crear colecciones de MariaDB y MySQL
+  hosts: all
+  vars:
+    namespace: coleccion
+    collection_name: modificacion_usuarios
+    role_name: usuarios
+    collection: "{{namespace}}.{{collection_name}}"
+    version: "2.0.4"
+    dir: /ansible/colecciones
+    full_path: "{{ dir }}/{{namespace}}/{{collection_name}}"
+    dependencies: "community.mysql: '*'"
+    instalar: false
+    tasks: 
+      - creacion_usuarios.yaml 
+      - eliminacion_usuarios.yaml
+      - permisos_usuarios.yaml
+
+  tasks:
+##################################################################################
+## CREAR COLECCION CON EL NOMBRE ESTABLECIDO
+
+    - name: crear coleccion
+      ansible.builtin.command:
+        cmd: "ansible-galaxy collection init {{ collection }}"
+      args: 
+        chdir: "{{dir}}"
+        creates: "{{dir}}/{{collection | replace('.','/')}}"
+      register: result_create
+
+    - debug: var=result_create
+
+##################################################################################
+## CREAR DIRECTORIO DE ROLES
+
+    - name: Crear directorio del rol
+      ansible.builtin.file:
+        path: "{{ full_path }}/roles/{{ role_name }}/tasks"
+        state: directory
+        mode: '0755'
+      register: result_directory
+
+    - debug: var=result_directory
+
+##################################################################################
+## COPIAR TAREA PARA LOS ROLES
+
+    - name: Copiar tareas a la carpeta de roles
+      ansible.builtin.copy:
+        src: "/ansible/plays/base_datos/{{item}}"
+        dest: "{{ full_path }}/roles/{{ role_name }}/tasks/{{item}}"
+        mode: '0755'
+        remote_src: true
+      loop: "{{tasks}}"
+      register: result_role
+
+    - debug: var=result_role
+
+##################################################################################
+## AGREGAR DEPENDENCIAS
+
+    - name: Agregar dependencia en galaxy.yml
+      ansible.builtin.replace:
+        path: "{{ full_path }}/galaxy.yml"
+        regexp: '^dependencies:.*'
+        replace: "dependencies: { {{ dependencies }} }"
+      register: result_dependencies
+
+    - debug: var=result_dependencies        
+
+##################################################################################
+## CAMBIAR VERSION
+
+    - name: Cambiar versión
+      ansible.builtin.replace:
+        path: "{{ full_path }}/galaxy.yml"
+        regexp: '^version:.*'
+        replace: "version: {{ version }}"
+      register: result_version
+
+    - debug: var=result_version
+
+##################################################################################
+## CONSTRUIR COLECCION
+
+    - name: Tratar de construir una coleccion
+      block:
+      - name: Construir coleccion
+        ansible.builtin.command:
+          cmd: "ansible-galaxy collection build"
+          chdir: "{{ full_path }}"
+        register: result_build
+        
+      rescue:
+        - name: Marcar error al construir coleccion
+          set_fact:
+            collection_error: true
+
+    - debug: var=result_build
+
+##################################################################################
+## INSTALAR COLECCION
+
+    - name: Instalar colección localmente
+      ansible.builtin.command:
+        cmd: "ansible-galaxy collection install {{ namespace }}-{{ collection_name }}-{{ version }}.tar.gz"
+        chdir: "{{ full_path }}"
+      register: instalacion
+      when: instalar and not collection_error | default(false)
+
+    - debug: var=instalacion
+
+##################################################################################
+## EVALUAR RESULTADO DE LAS TAREAS
+
+    - name: Evaluar resultado al tratar de crear una coleccion
+      set_fact:
+        resultTarea: >-
+          {%- if result_build.changed and not collection_error | default(false)-%}
+            SUCCESSFUL
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+
+##################################################################################
+## MOSTRAR RESULTADO FINAL
+
+    - name: Resultado cuando se crea la coleccion exitosamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La coleccion -{{ collection }}- ha sido creada correctamente" 
+              - "Version: {{ version }}"
+              - "Dependencias: {{ dependencies }}"
+              - "Rol creado: {{ role_name }}"
+              - "Tareas agregadas: {{ tasks }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL" and not instalar
+
+    - name: Resultado cuando se crea la coleccion exitosamente y se instala
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La coleccion -{{ collection }}- ha sido creada e instalada correctamente" 
+              - "Version: {{ version }}"
+              - "Dependencias: {{ dependencies }}"
+              - "Rol creado: {{ role_name }}"
+              - "Tareas agregadas: {{ tasks }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL" and instalar
+
+    - name: Resultado cuando la coleccion ya existe
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La coleccion -{{ collection }}- no pudo crearse debido a que ya existe en el sistema"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and collection_error | default(false)
+
+    - name: Resultado cuando hubo algun problema durante el proceso de creacion de la coleccion
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La coleccion -{{ collection }}- no pudo crearse correctamente verifique los parametros ingresados"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not collection_error | default(false) and (result_create.failed or result_directory.failed or result_role.failed or result_dependencies.failed or result_version.failed)

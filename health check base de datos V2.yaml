@@ -1,0 +1,195 @@
+---
+- name: Health check BD MariaDB
+  hosts: server-rocky
+  become: true
+ 
+  vars:
+    db_host: "172.16.40.122"
+    db_port: 3306
+    db_name: "base_datos4"
+    db_user: "userdb"
+    db_password: "Test2025"
+ 
+  tasks:
+  ########## VERIFICA SI LA BASE DE DATOS ESTA ACTIVA ##########
+    - name: Verificar si el servicio mariadb está activo
+      ansible.builtin.command:
+        cmd: systemctl is-active mariadb
+      register: estado_servicio
+      ignore_errors: yes
+ 
+    - name: Debug estado servicio completo
+      debug:
+        var: estado_servicio
+ 
+  ########## MUESTRA EL ESTADO DE LA BASE DE DATOS (ACTIVA/INACTIVA) ##########
+    - name: Muestra si la BD está activa
+      debug:
+        msg: "La base de datos está activa"
+      when: estado_servicio.stdout == "active"
+ 
+    - name: Muestra si la BD está inactiva
+      debug:
+        msg: "La base de datos no está activa"
+      when: estado_servicio.stdout != "active"
+ 
+  ########## VERIFICA LA CONEXION A LA BASE DE DATOS ##########
+    - name: Verificar conexión a la base de datos
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: "SELECT 1;"
+      register: conexion_bd
+      ignore_errors: yes
+      when: estado_servicio.stdout == "active"
+      
+    - debug: 
+        var: conexion_bd
+ 
+  ########## MUESTRA EL ESTADO DE LA CONEXIÓN ##########
+    - name: Muestra el estado de la conexión de la base de datos si está activa
+      debug:
+        msg: "La conexión con la base de datos está activa"
+      when: estado_servicio.stdout == "active" and conexion_bd.query_result is defined
+ 
+    - name: Muestra el estado de la conexión de la base de datos si no está activa
+      debug:
+        msg: "La conexión con la base de datos está inactiva"
+      when: estado_servicio.stdout != "active" or conexion_bd.query_result is not defined
+ 
+  ########## TIEMPO DE ESPERA DE LA BASE DE DATOS ##########
+    - name: Tiempo de espera de conexión a la BD
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: "SHOW VARIABLES LIKE 'connect_timeout';"
+      register: tiempo_espera
+      when: estado_servicio.stdout == "active"
+ 
+  ######### MUESTRA EL TIEMPO DE ESPERA #########
+    - name: Muestra el tiempo de espera
+      debug:
+        msg: "El tiempo de espera es: {{ tiempo_espera.query_result }}"
+      when: estado_servicio.stdout == "active" and tiempo_espera.query_result is defined and tiempo_espera.query_result|length > 0
+ 
+  ########## CAPACIDAD DE LA BASE DE DATOS ##########
+    - name: Capacidad de la BD
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: >
+          SELECT SUM(data_length + index_length) AS size_bytes
+          FROM information_schema.tables
+          WHERE table_schema = '{{ db_name }}';
+      register: capacidad_base
+      when: estado_servicio.stdout == "active"
+ 
+  ########## MUESTRA CAPACIDAD DE LA BASE DE DATOS ###########
+    - name: Muestra capacidad de la BD
+      debug:
+        msg: "La capacidad de la base de datos (en bytes) es: {{ capacidad_base.query_result[0].size_bytes | default('No definido') }}"
+      when: estado_servicio.stdout == "active" and capacidad_base.query_result is defined
+ 
+  ########## CONEXIONES ACTIVAS ##########
+    - name: Conexiones activas
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: SHOW STATUS LIKE 'Threads_connected';
+      register: conexiones_activas
+      when: estado_servicio.stdout == "active"
+ 
+  ######### MUESTRA CONEXIONES ACTIVAS ##########
+    - name: Muestra las conexiones activas
+      debug:
+        msg: "El total de conexiones activas son: {{ conexiones_activas.query_result[0].Value | default('No definido') }}"
+      when: estado_servicio.stdout == "active" and conexiones_activas.query_result is defined
+ 
+  ########## USUARIOS CONECTADOS A LA BASE DE DATOS ##########
+    - name: Usuarios conectados
+      community.mysql.mysql_query:
+        login_host: "{{ db_host }}"
+        login_port: "{{ db_port }}"
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: SELECT DISTINCT USER, HOST FROM information_schema.processlist;
+      register: usuarios_conectados
+      when: estado_servicio.stdout == "active"
+ 
+  ########## MUESTRA USUARIOS CONECTADOS ##########
+    - name: Muestra usuarios conectados
+      debug:
+        msg: "Los usuarios conectados son: {{ usuarios_conectados.query_result | default('No definido') }}"
+      when: estado_servicio.stdout == "active"
+ 
+  ########## EVALUA SI LA TAREA FUE EXITOSA ##########
+    - name: Evaluar resultado cuando el servicio esta activo
+      set_fact: 
+        resultTarea: >-
+          {%- if conexion_bd.query_result is defined -%}
+          SUCCESSFUL
+          {%- else -%}
+          ESCALATED
+          {%- endif -%}
+      when: estado_servicio.stdout == 'active'
+
+    - name: Evalua el resultado cuando el servicio esta inactivo
+      set_fact:
+        resultTarea: "ESCALATED"
+      when: estado_servicio.stdout !='active'
+
+    - name: Mostrar resultado de la evaluacion
+      debug: 
+        var: resultTarea
+      when: resultTarea is defined
+      
+ 
+  ########## RESULTADO DE LA TAREA ##########
+    - name: Resultado de la tarea cuando es Exitosa
+      block:
+        - name: Mostrar mensaje de éxito
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La base de datos está activa y accesible."
+              - "Estado del servicio: {{ estado_servicio.stdout }}"
+              - "Consulta de prueba ejecutada correctamente: {{ conexion_bd.query_result }}"
+          ignore_errors: yes
+      when: resultTarea == "SUCCESSFUL"
+ 
+    - name: Resultado de la tarea cuando es Fallido (servicio inactivo)
+      block:
+        - name: Mostrar mensaje de error por servicio
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "El servicio del sistema no está activo."
+              - "Estado reportado: {{ estado_servicio.stdout }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and estado_servicio.stdout != 'active'
+ 
+    - name: Resultado de la tarea cuando es Fallido (consulta no ejecutada)
+      block:
+        - name: Mostrar mensaje de error por base de datos
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "El servicio está activo, pero la base de datos no respondió correctamente."
+              - "Estado del servicio: {{ estado_servicio.stdout }}"
+              - "No se obtuvo resultado válido de la consulta."
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and estado_servicio.stdout == 'active' and conexion_bd.query_result is not defined

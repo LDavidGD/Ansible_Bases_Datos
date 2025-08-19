@@ -1,0 +1,44 @@
+---
+- name: "Clonacion de una base de datos" 
+  hosts: all
+  vars:
+      src_host: "172.16.40.122"
+      src_user: "userdb"
+      src_password: "Test2025"
+      src_db: "clientes"
+      src_res: "/root/backups"
+      dest_user: "user01"
+      dest_password: "USER01!@"
+      dump_file_lc: "/root/backups/{{ src_db }}.sql"
+      dump_file: "~/backups/{{ src_db }}.sql"
+
+  tasks:
+  - name: Crear respaldo
+    ansible.builtin.shell: >
+        mysqldump -u{{ src_user }} -p{{ src_password }} {{ src_db }} > {{ src_res }}/{{ src_db }}.sql
+    args:
+        executable: /bin/bash
+    register: result_backup
+
+  - debug:
+      var: result_backup | type_debug
+
+
+  # Traer Backup a la maquina de control
+  - name: crear directorio local de backups
+    ansible.builtin.file:
+      path: ~/backups
+      state: directory
+      mode: '0700'
+      
+  - name: guardar_backup
+    ansible.builtin.fetch:
+        src: "{{ dump_file_lc }}"
+        dest: "{{ dump_file }}" 
+        flat: true
+    register: clone_reg
+
+  - name: "Respuesta de la clonacion"
+    debug:
+      msg: >-
+        {{ 'Base clonada' if clone_reg.changed == true else 'La base de datos no se clono.' }}

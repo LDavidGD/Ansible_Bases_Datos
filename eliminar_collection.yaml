@@ -1,0 +1,117 @@
+---
+- name: Eliminar colecciones de MariaDB y MySQL
+  hosts: all
+  vars:
+    namespace: coleccion
+    collection_name: modificacion_usuarios
+    collection: "{{namespace}}.{{collection_name}}"
+    dir: /ansible/colecciones
+    full_path: "{{ dir }}/{{namespace}}"
+
+  tasks:
+##################################################################################
+## VERIFICAR SI EXISTE LA COLECCION
+
+    - name: Obtener información del directorio
+      ansible.builtin.stat:
+        path: "{{ full_path }}"
+      register: result_dir
+
+    - debug: var=result_dir
+
+##################################################################################
+## VERIFICAR SI EXISTE LA INSTALACION
+
+    - name: Obtener información del directorio
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME }}/.ansible/collections/ansible_collections/{{namespace}}/{{collection_name}}"
+      register: result_dir_inst
+
+    - debug: var=result_dir_inst
+
+##################################################################################
+## ELIMINAR COLECCION EN EL DIRECTORIO ESTABLECIDO
+
+    - name: Eliminar colección 
+      ansible.builtin.file:
+        path: "{{ full_path }}"
+        state: absent
+      register: result_delete
+      when: result_dir.stat.exists
+
+    - debug: var=result_delete
+
+##################################################################################
+## ELIMINAR INSTALACION
+
+    - name: Eliminar instalacion de la coleccion
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.ansible/collections/ansible_collections/{{namespace}}"
+        state: absent
+      register: result_install
+      when: result_dir_inst.stat.exists
+
+    - debug: var=result_install
+
+##################################################################################
+## EVALUAR RESULTADO DE LAS TAREAS
+
+    - name: Evaluar resultado al tratar de eliminar una coleccion
+      set_fact:
+        resultTarea: >-
+          {%- if result_delete.changed and result_dir.stat.exists-%}
+            SUCCESSFUL
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+
+##################################################################################
+## MOSTRAR RESULTADO FINAL
+
+    - name: Resultado cuando se elimina la coleccion exitosamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La coleccion -{{ collection }}- ha sido eliminada correctamente" 
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL"
+
+    - name: Resultado cuando la coleccion no existe
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La coleccion -{{ collection }}- no pudo eliminarse debido a que no existe en el sistema"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not result_dir.stat.exists and not result_dir_inst.stat.exists 
+
+    - name: Resultado cuando no existe la coleccion no existe pero si la instalacion
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La coleccion -{{ collection }}- no existe, la instalacion fue removida"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and not result_dir.stat.exists and  result_dir_inst.stat.exists 
+
+    - name: Resultado cuando hubo algun problema durante el proceso de eliminacion de la coleccion
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La coleccion -{{ collection }}- no pudo eliminarse correctamente"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and result_dir.stat.exists and result_dir_inst.stat.exists 

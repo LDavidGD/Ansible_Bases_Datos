@@ -1,0 +1,153 @@
+---
+- name: Borrar base de datos
+  hosts: all
+  vars:
+    mariadb_host: 172.16.40.122
+    mariadb_user: userdb
+    mariadb_password: Test2025
+    puerto: 3306
+    base_datos: base_datos2
+    nombre_usr: Ayala1
+    password_user: EdPass12345
+
+  tasks:
+##################################################################################
+## VALIDAR SI LA BASE DE DATOS EXISTE EN EL SERVIDOR
+
+    - name: Verificar si existe la BD
+      community.mysql.mysql_query:
+        login_host: "{{mariadb_host}}"
+        login_user: "{{mariadb_user}}"
+        login_password: "{{mariadb_password}}"
+        query: >
+          SELECT EXISTS (
+          SELECT SCHEMA_NAME FROM information_schema.schemata
+          WHERE SCHEMA_NAME = "{{ base_datos }}"
+          )AS existe;
+      register: verificar_db
+
+##################################################################################
+## VALIDACIÓN SI EXISTE EL USUARIO
+
+    - name: Verificar si existe el usuario
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        query: >
+          SELECT EXISTS (
+            SELECT user FROM mysql.user
+            WHERE user = "{{ nombre_usr }}"
+          ) AS existe;
+      register: verificar_user
+
+##################################################################################
+## ACTUALIZACIÓN DE CREDENCIALES AL USUARIO EXISTENTE
+
+    - name: Actualizar credenciales con usuario existente
+      ansible.builtin.set_fact:
+        mariadb_user: "{{ nombre_usr }}"
+        mariadb_password: "{{ password_user }}"
+      register: credenciales
+      when: verificar_user.query_result[0][0]['existe']
+
+##################################################################################
+## VERIFICAR CREDENCIALES AL USUARIO EXISTENTE
+
+    - name: Verificar si la clave es correcta
+      block:
+      - name: Verificar si la contraseña es válida
+        community.mysql.mysql_query:
+          login_user: "{{ mariadb_user }}"
+          login_password: "{{ mariadb_password }}"
+          login_host: "{{ mariadb_host }}"
+          query: "SELECT 1;"
+        register: validar_credenciales
+        when: verificar_user.query_result[0][0]['existe']
+
+      rescue:
+        - set_fact:
+            pass_error: true
+
+##################################################################################
+## VALOR POR DEFECTO SI NO SE CREA BASE DE DATOS POR ERROR DE CREDENCIALES
+    - name: Establecer valor por defecto si las credenciales son incorrectas
+      set_fact:
+        value_db: true
+      when: verificar_user.query_result[0][0]['existe'] and not validar_credenciales.failed | default(false)
+
+##################################################################################
+## BORRAR BASE DE DATOS SI ES QUE EXISTE
+
+    - name: Tratar de borrar base de datos
+      block:
+      - name: Borrar base de datos
+        community.mysql.mysql_db:
+          login_user: "{{ mariadb_user }}"
+          login_password: "{{ mariadb_password }}"
+          login_host: "{{ mariadb_host }}"
+          name: "{{ base_datos }}"
+          state: absent
+        register: result_db
+        when: verificar_db.query_result[0][0]['existe'] | default(false) and verificar_user.query_result[0][0]['existe'] and not validar_credenciales.failed | default(false) 
+
+      rescue:
+        - set_fact:
+            db_error: true
+
+##################################################################################
+## EVALUAR RESULTADO DE LAS TAREAS
+
+    - name: Evaluar resultado al tratar de borrar una base de datos
+      set_fact:
+        resultTarea: >-
+          {%- if verificar_db.query_result[0][0]['existe'] | default(false) and verificar_user.query_result[0][0]['existe'] and result_db.changed and not validar_credenciales.failed | default(false) -%}
+            SUCCESSFUL
+          {%- else -%}
+            ESCALATED
+          {%- endif -%}
+
+##################################################################################
+## MOSTRAR RESULTADO FINAL
+
+    - name: Resultado cuando se borra la base de datos exitosamente
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "La base de datos -{{ base_datos }}- ha sido eliminada exitosamente con el usuario -{{ mariadb_user }}-" 
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "SUCCESSFUL"
+
+    - name: Resultado cuando el usuario y/o contraseña son incorrectos
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Se intento eliminar una base de datos -{{ base_datos }}- con el usuario -{{ nombre_usr }}-, el usuario y/o la contraseña son incorrectos"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and (pass_error is defined or not verificar_user.query_result[0][0]['existe'])
+
+    - name: Resultado cuando la base de datos no existe
+      block:
+        - name: Muestra el resultado
+          debug:
+            msg:
+              - "RESULT-AUTOMATION"
+              - "-------------------------------------------------------"
+              - "Remediation Task Result is: {{ resultTarea }}"
+              - "Se intento eliminar una base de datos -{{ base_datos }}- con el usuario -{{ nombre_usr }}-, la base de datos no existe"
+              - "Host: {{ mariadb_host }}"
+              - "Puerto: {{ puerto }}"
+          ignore_errors: yes
+      when: resultTarea is defined and resultTarea == "ESCALATED" and (db_error | default(false) or value_db | default(false)) and not verificar_db.query_result[0][0]['existe'] | default(false) and not validar_credenciales.failed | default(false)
